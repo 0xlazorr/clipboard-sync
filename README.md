@@ -1,15 +1,18 @@
 # Local Bi-Directional Clipboard Sync (Linux ↔ Android)
 
-I built this lightweight, local-network clipboard sync utility in Python to automatically sync text and images between my Linux host (X11 or Wayland) and my Android phone running Termux.
+I built this lightweight, local-network clipboard sync utility to automatically sync text and images between my Linux host (X11 or Wayland) and my Android phone running Termux.
+
+This project offers two implementations for the Linux host:
+*   **Python Daemon ([linux_sync.py](linux_sync.py)):** Simple, requires no compilation, and runs out of the box. Ideal for quick setup.
+*   **Rust Daemon ([src/main.rs](src/main.rs)):** High-performance, compiled native binary. Extremely memory-efficient (~2MB RAM) with zero runtime dependencies. Ideal for developers.
 
 ---
 
 ## Features
 *   **Automatic Text Sync:** Bi-directional clipboard syncing (Linux to Android, Android to Linux).
 *   **Linux-to-Android Image Sync:** Copies images on Linux and saves them directly to your Android device's `/sdcard/Pictures/Clipboard_Sync/` folder, spawning a notification to open them.
-*   **Zero External Dependencies:** Built entirely using Python standard libraries (`socket`, `struct`, `threading`) interfacing with OS-native binaries.
-*   **Anti-Feedback loop logic:** Utilizes SHA-256 data hashing to ensure content received from a peer isn't echoed back, preventing infinite loops.
-*   **Systemd Integration:** Out-of-the-box systemd user service template for hands-free background execution on Linux.
+*   **Minimal Dependencies:** Standard library implementations with standard TCP sockets and SHA-256 data hashing to prevent feedback loops.
+*   **Systemd Integration:** Out-of-the-box systemd user service templates for background execution.
 
 ---
 
@@ -124,3 +127,56 @@ Modern Android aggressively kills background tasks. To keep the sync daemon runn
 
 *   **Android Clipboard Reads:** Due to Android 10+ sandbox limits, Termux can only read the system clipboard when the Termux window is focused, or when Termux is allowed to draw over other apps (under **Settings** → **Apps** → **Special app access** → **Display over other apps** → Allow **Termux**).
 *   **Android Image Writes:** Termux-API does not support injecting raw binary images into the Android clipboard. Instead, images copied on Linux are saved to `/sdcard/Pictures/Clipboard_Sync/` and a notification is triggered. You can tap the notification to immediately view or share the image.
+
+---
+
+## 5. Rust Daemon Upgrade (Linux Host)
+
+If you prefer a highly optimized, compiled native binary for the Linux host instead of running Python, you can compile and use the Rust implementation included in this directory.
+
+### Why Use the Rust Daemon?
+1.  **Memory Footprint:** The Rust binary runs using only **~2MB to 3MB of RAM** (compared to Python's ~30MB).
+2.  **Zero Overhead:** Compiled native execution with zero startup/interpreter delay.
+3.  **Static Execution:** No dependency on python packages or version discrepancies on the host.
+
+### Build and Run instructions:
+1.  Navigate to the directory and run Cargo to build in release mode:
+    ```bash
+    cargo build --release
+    ```
+2.  The optimized binary will be compiled to `./target/release/clipboard-sync`.
+3.  To run it manually:
+    ```bash
+    ./target/release/clipboard-sync
+    ```
+
+### Updating Systemd to Use the Rust Daemon:
+If you want systemd to run your compiled Rust binary instead of the Python script:
+1. Edit your systemd service file `~/.config/systemd/user/clipboard-sync.service` (or [clipboard-sync.service](clipboard-sync.service) in this folder).
+2. Change the `ExecStart` line to target your compiled Rust binary:
+   ```ini
+   ExecStart=%h/Documents/clipboard-sync/target/release/clipboard-sync
+   ```
+3. Reload and restart the service:
+   ```bash
+   systemctl --user daemon-reload
+   systemctl --user restart clipboard-sync.service
+   ```
+
+---
+
+## 6. Security Guidelines
+
+This utility is designed for trusted local connections and does not implement built-in transport encryption or authorization checks. 
+
+To keep your clipboard contents (which may contain passwords or sensitive keys) safe when uploading or using this setup:
+
+1.  **Do Not Run on Public Wi-Fi:** Avoid exposing the daemon port (`9999`) to untrusted physical subnets. Anyone on the same network could potentially intercept clipboard packets or write data to your clipboard.
+2.  **Expose Only via Secure VPNs (Tailscale):** The safest deployment is over an encrypted mesh network like **Tailscale**. Instead of listening on all interfaces (`0.0.0.0`), you can modify the socket listener in the code to bind only to your device's Tailscale interface IP.
+3.  **Local SSH Tunneling Forwarding:** For remote access, bind the listeners to localhost (`127.0.0.1`) and map them using an SSH port forward:
+    ```bash
+    ssh -L 9999:127.0.0.1:9999 user@your-linux-host
+    ```
+4.  **DoS Mitigation:** To prevent Denial-of-Service attacks, the daemons (both Python and Rust versions) enforce a strict **25 MB payload size limit** to avoid arbitrary memory allocation exhaustion crashes.
+
+

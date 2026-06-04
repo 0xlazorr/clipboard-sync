@@ -162,6 +162,13 @@ def handle_incoming_connection(conn, addr):
         if not header or len(header) < 5:
             return
         packet_type, length = struct.unpack("!BI", header)
+        
+        # Limit max payload size to 25 MB to prevent memory exhaustion attacks
+        MAX_PAYLOAD_SIZE = 25 * 1024 * 1024
+        if length > MAX_PAYLOAD_SIZE:
+            print(f"[-] Connection rejected from {addr[0]}: payload size ({length} bytes) exceeds limit (25MB)")
+            return
+
         payload = b""
         while len(payload) < length:
             chunk = conn.recv(min(length - len(payload), 4096))
