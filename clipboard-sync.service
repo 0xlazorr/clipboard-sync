@@ -1,14 +1,13 @@
 [Unit]
-Description=Clipboard Sync Daemon (Linux to Android)
+Description=Clipboard Sync Daemon (Python version)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 %h/Documents/clipboard-sync/linux_sync.py
+ExecStart=/usr/bin/python3 %h/Documents/clipboard-sync-python/linux_sync.py
 Restart=on-failure
 RestartSec=5
-# Environment variables ensure GUI clipboard utilities can interface with the correct display server
 Environment=DISPLAY=:0
 Environment=WAYLAND_DISPLAY=wayland-0
 
