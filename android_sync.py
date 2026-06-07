@@ -8,6 +8,7 @@ import struct
 import hashlib
 import subprocess
 import threading
+import shutil
 from datetime import datetime
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
@@ -34,7 +35,7 @@ def check_dependencies():
     dependencies = ["termux-clipboard-get", "termux-clipboard-set", "termux-notification"]
     missing = []
     for dep in dependencies:
-        if subprocess.run(["which", dep], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
+        if shutil.which(dep) is None:
             missing.append(dep)
     if missing:
         print(f"[-] Missing Termux commands: {', '.join(missing)}")
@@ -72,7 +73,10 @@ def show_notification(title, content, action_cmd=None, button_label=None, button
         cmd += ["--action", action_cmd]
     if button_label and button_action:
         cmd += ["--button1", button_label, "--button1-action", button_action]
-    subprocess.run(cmd)
+    try:
+        subprocess.run(cmd, timeout=5.0)
+    except Exception as e:
+        print(f"[-] Failed to show notification: {e}")
 
 # Read/Write Android Clipboard via Termux API
 def get_android_clipboard():
@@ -91,7 +95,11 @@ def set_android_clipboard(clip_type, data):
     if clip_type == "text":
         try:
             proc = subprocess.Popen(["termux-clipboard-set"], stdin=subprocess.PIPE)
-            proc.communicate(input=data.encode('utf-8'))
+            try:
+                proc.communicate(input=data.encode('utf-8'), timeout=3.0)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
             
             # Show a brief notification confirming receipt
             short_text = data if len(data) < 35 else data[:32] + "..."
@@ -136,6 +144,15 @@ def set_android_clipboard(clip_type, data):
             except Exception as e2:
                 print(f"[-] Fallback save also failed: {e2}")
 
+def recv_all(conn, length):
+    data = b""
+    while len(data) < length:
+        chunk = conn.recv(length - len(data))
+        if not chunk:
+            return None
+        data += chunk
+    return data
+
 # Server Socket (Receiving from Linux)
 def run_server(host, port):
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -158,8 +175,8 @@ def run_server(host, port):
 def handle_incoming_connection(conn, addr):
     try:
         conn.settimeout(5.0)
-        header = conn.recv(5)
-        if not header or len(header) < 5:
+        header = recv_all(conn, 5)
+        if not header:
             return
         packet_type, length = struct.unpack("!BI", header)
         
@@ -169,14 +186,8 @@ def handle_incoming_connection(conn, addr):
             print(f"[-] Connection rejected from {addr[0]}: payload size ({length} bytes) exceeds limit (25MB)")
             return
 
-        payload = b""
-        while len(payload) < length:
-            chunk = conn.recv(min(length - len(payload), 4096))
-            if not chunk:
-                break
-            payload += chunk
-        
-        if len(payload) == length:
+        payload = recv_all(conn, length)
+        if payload is not None and len(payload) == length:
             data_hash = state_manager.get_hash(payload)
             state_manager.update_received(data_hash)
             
@@ -201,7 +212,8 @@ def send_to_linux(peer_ip, port, clip_type, data):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(3.0)
             s.connect((peer_ip, port))
-            s.sendall(header + payload)
+            s.sendall(header)
+            s.sendall(payload)
             return True
     except Exception:
         # Ignore unreachable errors to avoid stdout clutter
@@ -239,7 +251,7 @@ if __name__ == "__main__":
     # Start receiver thread
     server_thread = threading.Thread(
         target=run_server,
-        args=("0.0.0.0", config["port"]),
+        args=("0.0.0.0", int(config["port"])),
         daemon=True
     )
     server_thread.start()
@@ -247,6 +259,6 @@ if __name__ == "__main__":
     # Run clipboard sender in main thread
     run_monitor(
         peer_ip=config["peer_ip"],
-        port=config["port"],
-        poll_interval=config["poll_interval"]
+        port=int(config["port"]),
+        poll_interval=float(config["poll_interval"])
     )

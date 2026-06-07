@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 %h/Documents/clipboard-sync-python/linux_sync.py
+ExecStart=/usr/bin/python3 -u %h/Documents/clipboard-sync-python/linux_sync.py
 Restart=on-failure
 RestartSec=5
 Environment=DISPLAY=:0

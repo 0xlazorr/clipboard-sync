@@ -8,6 +8,7 @@ import struct
 import hashlib
 import subprocess
 import threading
+import shutil
 
 # Configuration loader
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
@@ -36,11 +37,11 @@ def check_is_wayland():
 def check_dependencies():
     is_wayland = check_is_wayland()
     if is_wayland:
-        if not subprocess.run(["which", "wl-copy"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+        if shutil.which("wl-copy") is None:
             print("[-] Wayland detected but 'wl-clipboard' is not installed. Please install it.")
             sys.exit(1)
     else:
-        if not subprocess.run(["which", "xclip"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+        if shutil.which("xclip") is None:
             print("[-] X11 detected but 'xclip' is not installed. Please install it.")
             sys.exit(1)
     return is_wayland
@@ -73,14 +74,14 @@ state_manager = ClipboardState()
 def get_linux_clipboard(is_wayland):
     if is_wayland:
         try:
-            res = subprocess.run(["wl-paste", "--list-types"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            res = subprocess.run(["wl-paste", "--list-types"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2.0)
             types = res.stdout.splitlines()
         except Exception:
             return None, None
         
         if "image/png" in types:
             try:
-                img_res = subprocess.run(["wl-paste", "-t", "image/png"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                img_res = subprocess.run(["wl-paste", "-t", "image/png"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=3.0)
                 if img_res.returncode == 0 and len(img_res.stdout) > 0:
                     return "image", img_res.stdout
             except Exception:
@@ -88,16 +89,16 @@ def get_linux_clipboard(is_wayland):
         
         # Fallback to text
         try:
-            text_res = subprocess.run(["wl-paste", "-t", "text/plain"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            text_res = subprocess.run(["wl-paste", "-t", "text/plain"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=2.0)
             if text_res.returncode != 0:
-                text_res = subprocess.run(["wl-paste"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                text_res = subprocess.run(["wl-paste"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=2.0)
             return "text", text_res.stdout.decode('utf-8', errors='ignore')
         except Exception:
             return None, None
     else:
         # X11
         try:
-            res = subprocess.run(["xclip", "-selection", "clipboard", "-o", "-t", "TARGETS"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            res = subprocess.run(["xclip", "-selection", "clipboard", "-o", "-t", "TARGETS"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2.0)
             if res.returncode != 0:
                 return None, None
             types = res.stdout.splitlines()
@@ -106,7 +107,7 @@ def get_linux_clipboard(is_wayland):
             
         if "image/png" in types:
             try:
-                img_res = subprocess.run(["xclip", "-selection", "clipboard", "-t", "image/png", "-o"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                img_res = subprocess.run(["xclip", "-selection", "clipboard", "-t", "image/png", "-o"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=3.0)
                 if img_res.returncode == 0 and len(img_res.stdout) > 0:
                     return "image", img_res.stdout
             except Exception:
@@ -115,7 +116,7 @@ def get_linux_clipboard(is_wayland):
         # Fallback to text
         try:
             target = "UTF8_STRING" if "UTF8_STRING" in types else "STRING"
-            text_res = subprocess.run(["xclip", "-selection", "clipboard", "-t", target, "-o"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            text_res = subprocess.run(["xclip", "-selection", "clipboard", "-t", target, "-o"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=2.0)
             return "text", text_res.stdout.decode('utf-8', errors='ignore')
         except Exception:
             return None, None
@@ -124,17 +125,42 @@ def set_linux_clipboard(is_wayland, clip_type, data):
     if is_wayland:
         if clip_type == "text":
             proc = subprocess.Popen(["wl-copy", "-t", "text/plain"], stdin=subprocess.PIPE)
-            proc.communicate(input=data.encode('utf-8'))
+            try:
+                proc.communicate(input=data.encode('utf-8'), timeout=3.0)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
         elif clip_type == "image":
             proc = subprocess.Popen(["wl-copy", "-t", "image/png"], stdin=subprocess.PIPE)
-            proc.communicate(input=data)
+            try:
+                proc.communicate(input=data, timeout=3.0)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
     else:
         if clip_type == "text":
             proc = subprocess.Popen(["xclip", "-selection", "clipboard", "-t", "UTF8_STRING", "-i"], stdin=subprocess.PIPE)
-            proc.communicate(input=data.encode('utf-8'))
+            try:
+                proc.communicate(input=data.encode('utf-8'), timeout=3.0)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
         elif clip_type == "image":
             proc = subprocess.Popen(["xclip", "-selection", "clipboard", "-t", "image/png", "-i"], stdin=subprocess.PIPE)
-            proc.communicate(input=data)
+            try:
+                proc.communicate(input=data, timeout=3.0)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+
+def recv_all(conn, length):
+    data = b""
+    while len(data) < length:
+        chunk = conn.recv(length - len(data))
+        if not chunk:
+            return None
+        data += chunk
+    return data
 
 # Socket Server Thread (Receiving updates from Android)
 def run_server(host, port, is_wayland):
@@ -158,8 +184,8 @@ def run_server(host, port, is_wayland):
 def handle_incoming_connection(conn, addr, is_wayland):
     try:
         conn.settimeout(5.0)
-        header = conn.recv(5)
-        if not header or len(header) < 5:
+        header = recv_all(conn, 5)
+        if not header:
             return
         packet_type, length = struct.unpack("!BI", header)
         
@@ -169,14 +195,8 @@ def handle_incoming_connection(conn, addr, is_wayland):
             print(f"[-] Connection rejected from {addr[0]}: payload size ({length} bytes) exceeds limit (25MB)")
             return
 
-        payload = b""
-        while len(payload) < length:
-            chunk = conn.recv(min(length - len(payload), 4096))
-            if not chunk:
-                break
-            payload += chunk
-        
-        if len(payload) == length:
+        payload = recv_all(conn, length)
+        if payload is not None and len(payload) == length:
             data_hash = state_manager.get_hash(payload)
             state_manager.update_received(data_hash)
             
@@ -205,7 +225,8 @@ def send_to_android(peer_ip, port, clip_type, data):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(3.0)
             s.connect((peer_ip, port))
-            s.sendall(header + payload)
+            s.sendall(header)
+            s.sendall(payload)
             return True
     except Exception:
         # Silent failure when phone is offline/out of reach to avoid spamming terminal
@@ -243,7 +264,7 @@ if __name__ == "__main__":
     # Start receiver server in background thread
     server_thread = threading.Thread(
         target=run_server,
-        args=("0.0.0.0", config["port"], is_wayland),
+        args=("0.0.0.0", int(config["port"]), is_wayland),
         daemon=True
     )
     server_thread.start()
@@ -251,7 +272,7 @@ if __name__ == "__main__":
     # Run sender loop in main thread
     run_monitor(
         peer_ip=config["peer_ip"],
-        port=config["port"],
-        poll_interval=config["poll_interval"],
+        port=int(config["port"]),
+        poll_interval=float(config["poll_interval"]),
         is_wayland=is_wayland
     )
