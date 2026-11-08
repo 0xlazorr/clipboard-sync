@@ -1,15 +1,17 @@
 [Unit]
-Description=Clipboard Sync Daemon (Python version)
+Description=Secure Clipboard Sync Daemon (Privacy & Authenticated Encryption)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 -u %h/Documents/clipboard-sync-python/linux_sync.py
+ExecStart=/usr/bin/python3 -u %h/repos/clipboard-sync/linux_sync.py
+WorkingDirectory=%h/repos/clipboard-sync
 Restart=on-failure
 RestartSec=5
 Environment=DISPLAY=:0
 Environment=WAYLAND_DISPLAY=wayland-0
+Environment=PYTHONUNBUFFERED=1
 
 [Install]
 WantedBy=default.target
